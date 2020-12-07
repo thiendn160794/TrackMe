@@ -26,8 +26,10 @@ import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.model.*
 import com.google.android.material.snackbar.Snackbar
-import com.thiendn.trackme.TrackLocationService.Companion.ACTION_BROADCAST
-import com.thiendn.trackme.TrackLocationService.Companion.EXTRA_LOCATION
+import com.google.maps.android.BuildConfig
+import com.thiendn.trackme.Constants.BUNDLE_LOCATION
+import com.thiendn.trackme.Constants.INTENT_FILTER_BROADCAST
+import com.thiendn.trackme.Constants.REQUEST_PERMISSIONS_REQUEST_CODE
 import kotlinx.android.synthetic.main.fragment_practice.*
 import java.util.*
 
@@ -42,18 +44,22 @@ import java.util.*
 
      private var mListLocations = LinkedList<Location>()
 
-    private val REQUEST_PERMISSIONS_REQUEST_CODE = 34
-
      override fun onCreate(savedInstanceState: Bundle?) {
          super.onCreate(savedInstanceState)
+         println("thiendn: fragmentOnCreate")
          mReceiver = LocationReceiver()
+     }
+
+     override fun onDestroy() {
+         println("thiendn: fragmentOnDestroy")
+         super.onDestroy()
      }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         return inflater.inflate(R.layout.fragment_practice, container, false)
     }
 
-    private val mServiceConnection by lazy {
+    private val mServiceConnection =
         object : ServiceConnection{
             override fun onServiceDisconnected(name: ComponentName?) {
                 isBound = false
@@ -65,7 +71,12 @@ import java.util.*
                 isBound = true
             }
         }
-    }
+
+     private val routes by lazy {
+         context?.let {
+             configRoute(Constants.ROUTE_WIDTH, ContextCompat.getColor(it, R.color.colorAccent))
+         }
+     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
@@ -138,7 +149,6 @@ import java.util.*
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
-        Log.i("thiendn", "onRequestPermissionResult")
         if (requestCode == REQUEST_PERMISSIONS_REQUEST_CODE) {
             when {
                 grantResults.isEmpty() -> {
@@ -184,21 +194,26 @@ import java.util.*
              mReceiver?.let { it1 ->
                  LocalBroadcastManager.getInstance(it).registerReceiver(
                      it1,
-                     IntentFilter(ACTION_BROADCAST)
+                     IntentFilter(INTENT_FILTER_BROADCAST)
                  )
              }
          }
      }
 
      override fun onStart() {
+         println("thiendn: fragmentOnStart")
          super.onStart()
-         activity?.bindService(Intent(activity, TrackLocationService::class.java), mServiceConnection, Context.BIND_AUTO_CREATE)
          mapView.onStart()
+         activity?.bindService(Intent(activity, TrackLocationService::class.java), mServiceConnection, Context.BIND_AUTO_CREATE)
      }
 
      override fun onStop() {
-         activity?.unbindService(mServiceConnection)
+         println("thiendn: fragmentOnStop")
          mapView.onStop()
+         if (isBound){
+             activity?.unbindService(mServiceConnection)
+             isBound = false
+         }
          super.onStop()
      }
 
@@ -214,14 +229,14 @@ import java.util.*
          super.onPause()
      }
 
-     override fun onDestroy() {
+     override fun onDestroyView() {
          mapView.onDestroy()
-         super.onDestroy()
+         super.onDestroyView()
      }
 
      override fun onLowMemory() {
-         super.onLowMemory()
          mapView.onLowMemory()
+         super.onLowMemory()
      }
 
      /**
@@ -233,88 +248,25 @@ import java.util.*
              intent: Intent
          ) {
              Toast.makeText(context, "newLocation", Toast.LENGTH_SHORT).show()
-             intent.getParcelableExtra<Location>(EXTRA_LOCATION)?.let {
+
+             intent.getParcelableExtra<Location>(BUNDLE_LOCATION)?.let {
                  mListLocations.push(it)
              }
-             mListLocations.firstOrNull()?.let {
-                 markMarker(it.latitude, it.longitude, R.drawable.ic_android_black_24dp, 30, 30, "")
+
+             mListLocations.firstOrNull()?.let {location ->
+                 ContextCompat.getDrawable(context, R.drawable.ic_android_black_24dp)?.let {drawable ->
+                     mMap?.makeMakers(LatLng(location.latitude, location.longitude), drawable, "")
+                 }
              }
-             mListLocations.lastOrNull()?.let {
-                 markMarker(it.latitude, it.longitude, R.drawable.ic_android_black_24dp, 30, 30, "")
-             }
-             mMap?.animateCamera(autoZoomLevel())
-             mMap?.addPolyline(configRoute().apply {
+             mMap?.autoZoom(
+                 Constants.ZOOM_LEVEL,
+                 *(mListLocations.map { LatLng(it.latitude, it.longitude) }.toTypedArray())
+             )
+             mMap?.addPolyline(routes.apply {
                  for (location in mListLocations){
-                     this.add(LatLng(location.latitude, location.longitude))
+                     this?.add(LatLng(location.latitude, location.longitude))
                  }
              })
          }
-     }
-
-     private fun autoZoomLevel(): CameraUpdate? {
-         val builder = LatLngBounds.Builder()
-         for (location in mListLocations){
-             builder.include(LatLng(location.latitude, location.longitude))
-         }
-         val bounds = builder.build()
-         val padding = 200 // offset from edges of the map in pixels
-         return CameraUpdateFactory.newLatLngZoom(bounds.center, 17f).apply {
-
-         }
-     }
-
-     private fun markMarker(
-         latitude: Double,
-         longitude: Double,
-         drawable: Int,
-         width: Int,
-         height: Int,
-         displayAddress: String
-     ): Marker? {
-         val bitmap = drawableToBitmap(ContextCompat.getDrawable(context!!, R.drawable.ic_android_black_24dp)!!)
-         val smallMarker = Bitmap.createScaledBitmap(bitmap!!, width, height, false)
-         val latLng = LatLng(latitude, longitude)
-         val markerOptions = MarkerOptions()
-         markerOptions.position(latLng)
-         markerOptions.title(displayAddress)
-         markerOptions.icon(BitmapDescriptorFactory.fromBitmap(smallMarker))
-         return mMap?.addMarker(markerOptions)
-     }
-
-
-     fun drawableToBitmap(drawable: Drawable): Bitmap? {
-         var bitmap: Bitmap? = null
-         if (drawable is BitmapDrawable) {
-             val bitmapDrawable = drawable as BitmapDrawable
-             if (bitmapDrawable.bitmap != null) {
-                 return bitmapDrawable.bitmap
-             }
-         }
-         bitmap = if (drawable.intrinsicWidth <= 0 || drawable.intrinsicHeight <= 0) {
-             Bitmap.createBitmap(
-                 1,
-                 1,
-                 Bitmap.Config.ARGB_8888
-             ) // Single color bitmap will be created of 1x1 pixel
-         } else {
-             Bitmap.createBitmap(
-                 drawable.getIntrinsicWidth(),
-                 drawable.getIntrinsicHeight(),
-                 Bitmap.Config.ARGB_8888
-             )
-         }
-         val canvas = Canvas(bitmap)
-         drawable.setBounds(0, 0, canvas.width, canvas.getHeight())
-         drawable.draw(canvas)
-         return bitmap
-     }
-
-     private fun configRoute() : PolylineOptions{
-         val polylineOptions = PolylineOptions()
-         polylineOptions.width(7f) //dp
-
-         polylineOptions.geodesic(true)
-         polylineOptions.color(ContextCompat.getColor(context!!, R.color.colorAccent))
-         return polylineOptions
      }
  }
